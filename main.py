@@ -17,3 +17,10 @@ print(data.shape)
 print(data.columns)
 print(data.dtypes)
 print(data["Close"].head())
+
+data["Daily Return"] = data["Close"].pct_change()
+print(data[["Close", "Daily Return"]].head())
+
+data["MA20"] = data["Close"].rolling(20).mean()
+data["MA50"] = data["Close"].rolling(50).mean()
+print(data[["Close", "MA20", "MA50"]].iloc[[0, 19, 20, 49, 50]])
