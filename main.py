@@ -11,16 +11,6 @@ TRADING_DAYS = 252
 RISK_FREE_RATE = 0.0
 TRADE_COST = 0.001
 
-
-def get_data(ticker, period="1y"):
-    """Download daily price data. Returns None if the ticker has no data."""
-    data = yf.download(ticker, period=period, progress=False)
-    if data.empty:
-        return None
-    data.columns = data.columns.get_level_values(0)
-    return data
-
-
 def compute_metrics(data):
     """Return a copy of the data with daily returns and moving averages added."""
     data = data.copy()
@@ -43,8 +33,7 @@ def summarize(data):
     """Compute summary statistics and return them as a dictionary."""
     returns = data["Daily Return"]
 
-    excess_returns = returns - RISK_FREE_RATE / TRADING_DAYS
-    sharpe = excess_returns.mean() / returns.std() * TRADING_DAYS ** .5
+    sharpe = sharpe_ratio(returns)
 
     running_peak = data["Close"].cummax()
     drawdown = data["Close"] / running_peak - 1
@@ -95,28 +84,27 @@ def plot_returns(data, ticker):
     plt.ylabel("Number of days")
     plt.savefig(CHART_DIR / f"{ticker}_returns_hist.png", dpi=150, bbox_inches="tight")
 
-    def backtest(data, cost=TRADE_COST):
-        """Hold the stock when MA20 > MA50, otherwise sit in cash."""
-        df = data.copy()
+def backtest(data, cost=TRADE_COST):
+    df = data.copy()
 
-        # 1. Signal: 1 when the short average is above the long one
-        signal = (df["MA20"] > df["MA50"]).astype(int)
+    # 1. Signal: 1 when the short average is above the long one
+    signal = (df["MA20"] > df["MA50"]).astype(int)
 
-        # 2. Position: trade on YESTERDAY's signal (avoids look-ahead bias)
-        df["Position"] = signal.shift(1).fillna(0)
+    # 2. Position: trade on YESTERDAY's signal (avoids look-ahead bias)
+    df["Position"] = signal.shift(1).fillna(0)
 
-        # Start both strategies on the first day the 50-day MA exists
-        df = df[df["MA50"].notna()].copy()
+    # Start both strategies on the first day the 50-day MA exists
+    df = df[df["MA50"].notna()].copy()
 
-        # 3. Strategy return = position x market return, minus trading costs
-        trades = df["Position"].diff().abs().fillna(0)
-        df["Strategy Return"] = df["Position"] * df["Daily Return"] - trades * cost
+    # 3. Strategy return = position x market return, minus trading costs
+    trades = df["Position"].diff().abs().fillna(0)
+    df["Strategy Return"] = df["Position"] * df["Daily Return"] - trades * cost
 
-        # 4. Growth of $1 for each approach
-        df["Strategy Growth"] = (1 + df["Strategy Return"]).cumprod()
-        df["Buy & Hold Growth"] = (1 + df["Daily Return"]).cumprod()
+    # 4. Growth of $1 for each approach
+    df["Strategy Growth"] = (1 + df["Strategy Return"]).cumprod()
+    df["Buy & Hold Growth"] = (1 + df["Daily Return"]).cumprod()
 
-        return df, int(trades.sum())
+    return df, int(trades.sum())
 
 
 def print_backtest(df, trades):
@@ -143,20 +131,35 @@ def plot_backtest(df, ticker):
     plt.grid(alpha=0.3)
     plt.savefig(CHART_DIR / f"{ticker}_backtest.png", dpi=150, bbox_inches="tight")
 
+def get_data(ticker, period="1y"):
+    """Download daily price data. Returns None if the download fails or is empty."""
+    try:
+        data = yf.download(ticker, period=period, progress=False)
+    except Exception as error:
+        print(f"Download failed: {error}")
+        return None
+
+    if data.empty:
+        return None
+
+    data.columns = data.columns.get_level_values(0)
+    return data
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Analyze a stock's price history, returns, and risk."
-    )
-    parser.add_argument(
-        "--backtest",
-        action="store_true",
-        help="compare a 20/50-day MA crossover strategy with buy & hold",
     )
     parser.add_argument("ticker", help="ticker symbol, e.g. AAPL")
     parser.add_argument(
         "--period",
         default="1y",
-        help="how far back to look, e.g. 6mo, 1y, 5y, max (default: 1y)",
+        choices=["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "max"],
+        help="how far back to look (default: 1y)",
+    )
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="compare a 20/50-day MA crossover strategy with buy & hold",
     )
     parser.add_argument(
         "--no-show",
@@ -171,7 +174,8 @@ def main():
 
     data = get_data(ticker, args.period)
     if data is None:
-        print(f"No data found for {ticker} (period: {args.period})")
+        print(f"No data found for {ticker} (period: {args.period}). "
+              "Check the ticker and your connection.")
         sys.exit(1)
 
     data = compute_metrics(data)
